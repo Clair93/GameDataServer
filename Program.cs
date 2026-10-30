@@ -187,7 +187,8 @@ app.MapDelete("/monsters/{id:int}", (int id) =>
         : Results.NoContent();             // 204 No Content. 돌려줄 본문이 없다
 });
 
-app.Run("http://localhost:5000");
+var port = Environment.GetEnvironmentVariable("PORT") ?? "5000";
+app.Run($"http://0.0.0.0:{port}");
 
 // 데이터 모양
 class Monster
