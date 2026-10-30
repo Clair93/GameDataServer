@@ -6,7 +6,19 @@ var app = builder.Build();
 
 // ── 2회차. DB 파일 준비 ────────────────────────────────────────────────
 // Data/game.db 파일 하나가 데이터베이스다. 없으면 처음 열 때 만들어진다
-var dbPath = Path.Combine(app.Environment.ContentRootPath, "Data", "game.db");
+// var dbPath = Path.Combine(app.Environment.ContentRootPath, "Data", "game.db");
+// var connectionString = $"Data Source={dbPath}";
+
+// Data 폴더 경로
+var dataFolder = Path.Combine(
+    app.Environment.ContentRootPath, "Data");
+
+// 폴더가 없으면 자동 생성
+Directory.CreateDirectory(dataFolder);
+
+// SQLite DB 경로
+var dbPath = Path.Combine(dataFolder, "game.db");
+
 var connectionString = $"Data Source={dbPath}";
 
 // 테이블이 없으면 만든다. 있으면 그대로 둔다 (IF NOT EXISTS)
@@ -48,15 +60,17 @@ using (var conn = new SqliteConnection(connectionString))
 
 // ── 랭킹 테이블 준비 ────────────────────────────────────────────────
     var rangkingcreate = conn.CreateCommand();
-    rangkingcreate.CommandText = """
-        CREATE TABLE IF NOT EXISTS rangking (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            player_id TEXT NOT NULL UNIQUE,
-            name TEXT NOT NULL,
-            usescore INTEGER NOT NULL DEFAULT 0
-        )
-        """;
-    rangkingcreate.ExecuteNonQuery();
+
+rangkingcreate.CommandText = """
+    CREATE TABLE IF NOT EXISTS rangking (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        player_id TEXT,
+        name TEXT NOT NULL,
+        usescore INTEGER NOT NULL DEFAULT 0
+    )
+    """;
+
+rangkingcreate.ExecuteNonQuery();
 
     // ── 랭킹 초기 데이터 등록 ───────────────────────────
 
