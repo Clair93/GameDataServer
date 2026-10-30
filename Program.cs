@@ -13,7 +13,7 @@ var connectionString = $"Data Source={dbPath}";
 using (var conn = new SqliteConnection(connectionString))
 {
     conn.Open();
-    var create = conn.CreateCommand();
+    var create = conn.CreateCommand(); 
     create.CommandText = """
         CREATE TABLE IF NOT EXISTS monsters (
             id     INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -44,6 +44,37 @@ using (var conn = new SqliteConnection(connectionString))
             insert.ExecuteNonQuery();
         }
     }
+
+
+// ── 랭킹 테이블 준비 ────────────────────────────────────────────────
+    var rangkingcreate = conn.CreateCommand();
+    rangkingcreate.CommandText = """
+        CREATE TABLE IF NOT EXISTS rangking (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            player_id TEXT NOT NULL UNIQUE,
+            name TEXT NOT NULL,
+            usescore INTEGER NOT NULL DEFAULT 0
+        )
+        """;
+    rangkingcreate.ExecuteNonQuery();
+
+    var rangkingcount = conn.CreateCommand();
+    rangkingcount.CommandText = "SELECT COUNT(*) FROM rangking";
+    if ((long)rangkingcount.ExecuteScalar()! == 0)
+    {
+        var seedPath = Path.Combine(app.Environment.ContentRootPath, "Data", "rangking.json");
+        var seed = JsonSerializer.Deserialize<List<Rangking>>(
+            File.ReadAllText(seedPath), new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
+        foreach (var m in seed)
+        {
+            var insert = conn.CreateCommand();
+            insert.CommandText = "INSERT INTO rangking (name, usescore) VALUES ($name, $usescore)";
+            insert.Parameters.AddWithValue("$name", m.Name);
+            insert.Parameters.AddWithValue("$usescore", m.Usescore);
+            insert.ExecuteNonQuery();
+        }
+    }
+// ── 랭킹 테이블 준비 ────────────────────────────────────────────────
 }
 
 // SELECT 결과(행들)를 Monster 목록으로 바꾸는 헬퍼. GET 네 곳에서 같이 쓴다
@@ -75,10 +106,47 @@ static List<Monster> LoadAllMonsters(string connectionString)
     return ReadMonsters(reader);
 }
 
+// ── 랭킹 ────────────────────────────────────────────────
+
+static List<Rangking> ReadRangkings(SqliteDataReader reader)
+{
+    var rklist = new List<Rangking>();
+    while (reader.Read())   // 한 줄(한 마리)씩
+    {
+        rklist.Add(new Rangking
+        {
+            Id = reader.GetInt32(0),
+            Name = reader.GetString(1),
+            Usescore = reader.GetInt32(2)
+        });
+    }
+    return rklist;
+}
+
+static List<Rangking> LoadAllRangkings(string connectionString)
+{
+    using var conn = new SqliteConnection(connectionString);
+    conn.Open();
+    var rkcmd = conn.CreateCommand();
+    rkcmd.CommandText =
+    "SELECT id, name, usescore FROM rangking " +
+    "ORDER BY usescore DESC, id ASC LIMIT 10";
+    using var rkreader = rkcmd.ExecuteReader();
+    return ReadRangkings(rkreader);
+}
+
+// ── 랭킹 ────────────────────────────────────────────────
+
+
 app.MapGet("/hello", () => "안녕하세요, 서버입니다.");
 
 // ── 몬스터 조회 — 이제 파일이 아니라 DB에서 읽는다 ─────────────────────
 app.MapGet("/monsters", () => new { monsters = LoadAllMonsters(connectionString) });
+
+
+
+app.MapGet("/rangking", () => new { rangking = LoadAllRangkings(connectionString) });
+
 
 /*// 몬스터 하나 — 없으면 404
 app.MapGet("/monsters/{id:int}", (int id) =>
@@ -123,6 +191,39 @@ app.MapGet("/monsters/{id:int}", (int id) =>
         : Results.Ok(found[0]);
 });
 
+//
+
+app.MapGet("/rangking/{id:int}", (int id) =>
+{
+    using var conn = new SqliteConnection(connectionString);
+    conn.Open();
+    var rkcmd = conn.CreateCommand();
+    rkcmd.CommandText =
+    "SELECT id, name, usescore FROM rangking " +
+    "ORDER BY usescore DESC, id ASC LIMIT 10";
+    rkcmd.Parameters.AddWithValue("$id", id);   // 값은 글자로 이어 붙이지 않고 파라미터로 넘긴다
+    using var rkreader = rkcmd.ExecuteReader();
+    var found = ReadRangkings(rkreader);
+    return found.Count == 0
+        ? Results.NotFound(new { error = $"id {id} 랭킹이 없습니다." })
+        : Results.Ok(found[0]);
+});
+
+
+app.MapGet("/rangking/top10", () =>
+{
+    using var conn = new SqliteConnection(connectionString);
+    conn.Open();
+    var rkcmd = conn.CreateCommand();
+    rkcmd.CommandText =
+    "SELECT id, name, usescore FROM rangking " +
+    "ORDER BY usescore DESC, id ASC LIMIT 10";
+    using var rkreader = rkcmd.ExecuteReader();
+    var top10list = ReadRangkings(rkreader);
+    return Results.Ok(new { rangking = top10list });
+});
+
+//
 
 // ── 2회차. 몬스터 추가 — POST는 "받아라". 본문의 JSON이 Monster로 들어온다 ──
 app.MapPost("/monsters", (Monster m) =>
@@ -145,6 +246,116 @@ app.MapPost("/monsters", (Monster m) =>
 
     return Results.Created($"/monsters/{m.Id}", m);   // 201 Created + 새 몬스터
 });
+
+// ------- 랭킹 ----------
+
+// ── 랭킹 점수 등록 및 자동 갱신 ─────────────────────────
+app.MapPost("/rangking", (Rangking rk) =>
+{
+    // 1. 이름이 비어 있는지 검사
+    if (string.IsNullOrWhiteSpace(rk.Name))
+        return Results.BadRequest(new
+        {
+            error = "이름을 입력해야 합니다."
+        });
+
+    // 2. 음수 점수는 허용하지 않음
+    if (rk.Usescore < 0)
+        return Results.BadRequest(new
+        {
+            error = "점수는 0 이상이어야 합니다."
+        });
+
+    using var conn = new SqliteConnection(connectionString);
+    conn.Open();
+
+    // 여러 SQL 작업을 하나로 묶음
+    using var transaction = conn.BeginTransaction();
+
+    // 3. 같은 이름의 플레이어가 있는지 확인
+    var check = conn.CreateCommand();
+    check.Transaction = transaction;
+
+    check.CommandText =
+        "SELECT id, usescore FROM rangking " +
+        "WHERE name = $name LIMIT 1";
+
+    check.Parameters.AddWithValue("$name", rk.Name);
+
+    int existingId = 0;
+    int existingScore = 0;
+
+    using (var reader = check.ExecuteReader())
+    {
+        if (reader.Read())
+        {
+            existingId = reader.GetInt32(0);
+            existingScore = reader.GetInt32(1);
+        }
+    }
+
+    // 4. 기존 플레이어인 경우
+    if (existingId != 0)
+    {
+        // 기존 점수보다 높을 때만 수정
+        if (rk.Usescore > existingScore)
+        {
+            var update = conn.CreateCommand();
+            update.Transaction = transaction;
+
+            update.CommandText =
+                "UPDATE rangking SET usescore = $score " +
+                "WHERE id = $id";
+
+            update.Parameters.AddWithValue(
+                "$score", rk.Usescore);
+
+            update.Parameters.AddWithValue(
+                "$id", existingId);
+
+            update.ExecuteNonQuery();
+        }
+
+        transaction.Commit();
+
+        return Results.Ok(new
+        {
+            id = existingId,
+            name = rk.Name,
+            usescore = Math.Max(existingScore, rk.Usescore),
+            message = rk.Usescore > existingScore
+                ? "최고 점수가 갱신되었습니다."
+                : "기존 최고 점수를 유지합니다."
+        });
+    }
+
+    // 5. 신규 플레이어라면 DB에 추가
+    var insert = conn.CreateCommand();
+    insert.Transaction = transaction;
+
+    insert.CommandText = """
+        INSERT INTO rangking (name, usescore)
+        VALUES ($name, $score);
+        SELECT last_insert_rowid();
+        """;
+
+    insert.Parameters.AddWithValue("$name", rk.Name);
+    insert.Parameters.AddWithValue("$score", rk.Usescore);
+
+    rk.Id = (int)(long)insert.ExecuteScalar()!;
+
+    transaction.Commit();
+
+    return Results.Created($"/rangking/{rk.Id}", new
+    {
+        id = rk.Id,
+        name = rk.Name,
+        usescore = rk.Usescore,
+        message = "새로운 플레이어가 등록되었습니다."
+    });
+});
+
+//
 
 
 // ── 2회차. 몬스터 고치기 — PUT은 "이걸로 바꿔라". 본문의 JSON으로 그 id의 줄을 통째로 바꾼다 ──
@@ -172,6 +383,58 @@ app.MapPut("/monsters/{id:int}", (int id, Monster m) =>
 });
 
 
+//
+
+// ── 테스트용 랭킹 수정 ───────────────────────────────
+app.MapPut("/rangking/{id:int}", (int id, Rangking rk) =>
+{
+    // 이름 검사
+    if (string.IsNullOrWhiteSpace(rk.Name))
+        return Results.BadRequest(new
+        {
+            error = "이름을 입력해야 합니다."
+        });
+
+    // 점수 검사
+    if (rk.Usescore < 0)
+        return Results.BadRequest(new
+        {
+            error = "점수는 0 이상이어야 합니다."
+        });
+
+    using var conn = new SqliteConnection(connectionString);
+    conn.Open();
+
+    var cmd = conn.CreateCommand();
+
+    // 테스트용이므로 점수를 강제로 변경할 수 있음
+    // 기존 점수보다 낮아도 수정 가능
+    cmd.CommandText = """
+        UPDATE rangking
+        SET name = $name, usescore = $score
+        WHERE id = $id
+        """;
+
+    cmd.Parameters.AddWithValue("$name", rk.Name);
+    cmd.Parameters.AddWithValue("$score", rk.Usescore);
+    cmd.Parameters.AddWithValue("$id", id);
+
+    int changed = cmd.ExecuteNonQuery();
+
+    // 해당 ID가 없으면 404 반환
+    if (changed == 0)
+        return Results.NotFound(new
+        {
+            error = "해당 랭킹이 없습니다."
+        });
+
+    rk.Id = id;
+
+    return Results.Ok(rk);
+});
+
+//
+
 // ── 2회차. 몬스터 삭제 — DELETE는 "지워라". 본문은 없고 주소의 id만 쓴다 ──
 app.MapDelete("/monsters/{id:int}", (int id) =>
 {
@@ -187,6 +450,38 @@ app.MapDelete("/monsters/{id:int}", (int id) =>
         : Results.NoContent();             // 204 No Content. 돌려줄 본문이 없다
 });
 
+
+//
+
+// ── 테스트용 랭킹 삭제 ───────────────────────────────
+app.MapDelete("/rangking/{id:int}", (int id) =>
+{
+    using var conn = new SqliteConnection(connectionString);
+    conn.Open();
+
+    var cmd = conn.CreateCommand();
+
+    // 지정한 ID의 랭킹을 삭제
+    cmd.CommandText =
+        "DELETE FROM rangking WHERE id = $id";
+
+    cmd.Parameters.AddWithValue("$id", id);
+
+    int deleted = cmd.ExecuteNonQuery();
+
+    // 삭제할 데이터가 없는 경우
+    if (deleted == 0)
+        return Results.NotFound(new
+        {
+            error = "해당 랭킹이 없습니다."
+        });
+
+    // 정상적으로 삭제한 경우
+    return Results.NoContent();
+});
+
+//
+
 var port = Environment.GetEnvironmentVariable("PORT") ?? "5000";
 app.Run($"http://0.0.0.0:{port}");
 
@@ -199,3 +494,13 @@ class Monster
     public int Attack { get; set; }
     public float Speed { get; set; }
 }
+
+// --------------------------------------------------
+
+class Rangking
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = "";
+    public int Usescore { get; set; }
+}
+
