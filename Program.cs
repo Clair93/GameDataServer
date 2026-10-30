@@ -127,29 +127,45 @@ static List<Monster> LoadAllMonsters(string connectionString)
 
 // ── 랭킹 ────────────────────────────────────────────────
 
+// 랭킹 조회에 공통으로 쓰는 SELECT
+// rank = 나보다 점수가 높은 사람 수 + 1 → 점수가 바뀌면 순위도 자동으로 바뀐다 (동점이면 같은 순위)
+const string RankingSelectSql = """
+    SELECT r.id, r.name, r.usescore,
+           (SELECT COUNT(*) FROM rangking r2 WHERE r2.usescore > r.usescore) + 1 AS rank
+    FROM rangking r
+    """;
+
+// 점수 높은 순, 동점이면 먼저 등록한 사람(id 작은 쪽)이 위
+const string RankingOrderSql = " ORDER BY r.usescore DESC, r.id ASC";
+
 static List<Rangking> ReadRangkings(SqliteDataReader reader)
 {
     var rklist = new List<Rangking>();
-    while (reader.Read())   // 한 줄(한 마리)씩
+    while (reader.Read())   // 한 줄(한 명)씩
     {
         rklist.Add(new Rangking
         {
             Id = reader.GetInt32(0),
             Name = reader.GetString(1),
-            Usescore = reader.GetInt32(2)
+            Usescore = reader.GetInt32(2),
+            Rank = reader.GetInt32(3)
         });
     }
     return rklist;
 }
 
-static List<Rangking> LoadAllRangkings(string connectionString)
+// 랭킹을 점수 순으로 읽는다. limit이 0 이하면 전체
+static List<Rangking> LoadRangkings(string connectionString, int limit = 0)
 {
     using var conn = new SqliteConnection(connectionString);
     conn.Open();
     var rkcmd = conn.CreateCommand();
-    rkcmd.CommandText =
-    "SELECT id, name, usescore FROM rangking " +
-    "WHERE id = $id";
+    rkcmd.CommandText = RankingSelectSql + RankingOrderSql;
+    if (limit > 0)
+    {
+        rkcmd.CommandText += " LIMIT $limit";
+        rkcmd.Parameters.AddWithValue("$limit", limit);
+    }
     using var rkreader = rkcmd.ExecuteReader();
     return ReadRangkings(rkreader);
 }
@@ -164,7 +180,8 @@ app.MapGet("/monsters", () => new { monsters = LoadAllMonsters(connectionString)
 
 
 
-app.MapGet("/rangking", () => new { rangking = LoadAllRangkings(connectionString) });
+// 전체 랭킹 (점수 순)
+app.MapGet("/rangking", () => new { rangking = LoadRangkings(connectionString) });
 
 
 /*// 몬스터 하나 — 없으면 404
@@ -217,9 +234,7 @@ app.MapGet("/rangking/{id:int}", (int id) =>
     using var conn = new SqliteConnection(connectionString);
     conn.Open();
     var rkcmd = conn.CreateCommand();
-    rkcmd.CommandText =
-    "SELECT id, name, usescore FROM rangking " +
-    "WHERE id = $id";
+    rkcmd.CommandText = RankingSelectSql + " WHERE r.id = $id";
     rkcmd.Parameters.AddWithValue("$id", id);   // 값은 글자로 이어 붙이지 않고 파라미터로 넘긴다
     using var rkreader = rkcmd.ExecuteReader();
     var found = ReadRangkings(rkreader);
@@ -228,19 +243,9 @@ app.MapGet("/rangking/{id:int}", (int id) =>
         : Results.Ok(found[0]);
 });
 
-
+// 상위 10명만 — 점수 높은 순으로 정렬해서 10줄만 자른다
 app.MapGet("/rangking/top10", () =>
-{
-    using var conn = new SqliteConnection(connectionString);
-    conn.Open();
-    var rkcmd = conn.CreateCommand();
-    rkcmd.CommandText =
-    "SELECT id, name, usescore FROM rangking " +
-    "WHERE id = $id";
-    using var rkreader = rkcmd.ExecuteReader();
-    var top10list = ReadRangkings(rkreader);
-    return Results.Ok(new { rangking = top10list });
-});
+    Results.Ok(new { rangking = LoadRangkings(connectionString, 10) }));
 
 //
 
@@ -271,6 +276,8 @@ app.MapPost("/monsters", (Monster m) =>
 // ── 랭킹 점수 등록 및 자동 갱신 ─────────────────────────
 app.MapPost("/rangking", (Rangking rk) =>
 {
+    rk.Name = rk.Name?.Trim() ?? "";
+
     // 1. 이름이 비어 있는지 검사
     if (string.IsNullOrWhiteSpace(rk.Name))
         return Results.BadRequest(new
@@ -407,6 +414,8 @@ app.MapPut("/monsters/{id:int}", (int id, Monster m) =>
 // ── 테스트용 랭킹 수정 ───────────────────────────────
 app.MapPut("/rangking/{id:int}", (int id, Rangking rk) =>
 {
+    rk.Name = rk.Name?.Trim() ?? "";
+
     // 이름 검사
     if (string.IsNullOrWhiteSpace(rk.Name))
         return Results.BadRequest(new
@@ -521,5 +530,6 @@ class Rangking
     public int Id { get; set; }
     public string Name { get; set; } = "";
     public int Usescore { get; set; }
+    public int Rank { get; set; }   // 서버가 계산해서 채운다 (요청 본문의 값은 무시)
 }
 
