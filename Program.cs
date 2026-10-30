@@ -135,7 +135,7 @@ static List<Rangking> LoadAllRangkings(string connectionString)
     var rkcmd = conn.CreateCommand();
     rkcmd.CommandText =
     "SELECT id, name, usescore FROM rangking " +
-    "ORDER BY usescore DESC, id ASC LIMIT 10";
+    "WHERE id = $id";
     using var rkreader = rkcmd.ExecuteReader();
     return ReadRangkings(rkreader);
 }
@@ -205,7 +205,7 @@ app.MapGet("/rangking/{id:int}", (int id) =>
     var rkcmd = conn.CreateCommand();
     rkcmd.CommandText =
     "SELECT id, name, usescore FROM rangking " +
-    "ORDER BY usescore DESC, id ASC LIMIT 10";
+    "WHERE id = $id";
     rkcmd.Parameters.AddWithValue("$id", id);   // 값은 글자로 이어 붙이지 않고 파라미터로 넘긴다
     using var rkreader = rkcmd.ExecuteReader();
     var found = ReadRangkings(rkreader);
@@ -222,7 +222,7 @@ app.MapGet("/rangking/top10", () =>
     var rkcmd = conn.CreateCommand();
     rkcmd.CommandText =
     "SELECT id, name, usescore FROM rangking " +
-    "ORDER BY usescore DESC, id ASC LIMIT 10";
+    "WHERE id = $id";
     using var rkreader = rkcmd.ExecuteReader();
     var top10list = ReadRangkings(rkreader);
     return Results.Ok(new { rangking = top10list });
