@@ -58,21 +58,26 @@ using (var conn = new SqliteConnection(connectionString))
         """;
     rangkingcreate.ExecuteNonQuery();
 
+    // ── 랭킹 초기 데이터 등록 ───────────────────────────
+
+        // DB에 저장된 랭킹 데이터 개수 확인
     var rangkingcount = conn.CreateCommand();
-    rangkingcount.CommandText = "SELECT COUNT(*) FROM rangking";
-    if ((long)rangkingcount.ExecuteScalar()! == 0)
+
+    rangkingcount.CommandText =
+        "SELECT COUNT(*) FROM rangking";
+
+    // 현재 저장된 랭킹 개수
+    long countRanking = (long)rangkingcount.ExecuteScalar()!;
+
+    // 랭킹 데이터가 없을 경우
+    if (countRanking == 0)
     {
-        var seedPath = Path.Combine(app.Environment.ContentRootPath, "Data", "rangking.json");
-        var seed = JsonSerializer.Deserialize<List<Rangking>>(
-            File.ReadAllText(seedPath), new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
-        foreach (var m in seed)
-        {
-            var insert = conn.CreateCommand();
-            insert.CommandText = "INSERT INTO rangking (name, usescore) VALUES ($name, $usescore)";
-            insert.Parameters.AddWithValue("$name", m.Name);
-            insert.Parameters.AddWithValue("$usescore", m.Usescore);
-            insert.ExecuteNonQuery();
-        }
+        Console.WriteLine("랭킹 데이터가 없습니다.");
+        Console.WriteLine("새로운 랭킹 데이터를 등록할 수 있습니다.");
+    }
+    else
+    {
+        Console.WriteLine($"현재 랭킹 데이터: {countRanking}명");
     }
 // ── 랭킹 테이블 준비 ────────────────────────────────────────────────
 }
